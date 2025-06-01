@@ -1,0 +1,82 @@
+import numpy as np
+from scipy.integrate import solve_ivp
+from scipy.optimize import root_scalar
+import matplotlib.pyplot as plt
+
+
+a, b = 0, 1
+ya, yb = 1, 2
+h = 0.1
+N = int((b - a) / h)
+
+
+def ode_system(x, y):
+    y1, y2 = y
+    dy1 = y2
+    dy2 = -(x + 1) * y2 + 2 * y1 + (1 - x**2) * np.exp(-x)
+    return [dy1, dy2]
+
+def shooting_residual(s):
+    sol = solve_ivp(ode_system, [a, b], [ya, s], t_eval=[b])
+    return sol.y[0, -1] - yb
+
+sol_shooting_slope = root_scalar(shooting_residual, bracket=[0, 10], method='bisect')
+s_opt = sol_shooting_slope.root
+sol_shooting = solve_ivp(ode_system, [a, b], [ya, s_opt], t_eval=np.linspace(a, b, N+1))
+x_shoot = sol_shooting.t
+y_shoot = sol_shooting.y[0]
+
+
+x_fd = np.linspace(a, b, N+1)
+A = np.zeros((N-1, N-1))
+b_fd = np.zeros(N-1)
+
+for i in range(1, N):
+    xi = x_fd[i]
+    A[i-1, i-1] = -2/h**2 + 2
+    if i > 1:
+        A[i-1, i-2] = 1/h**2 - (xi+1)/(2*h)
+    if i < N-1:
+        A[i-1, i] = 1/h**2 + (xi+1)/(2*h)
+    b_fd[i-1] = (1 - xi**2) * np.exp(-xi)
+
+b_fd[0] -= (1/h**2 - (x_fd[1]+1)/(2*h)) * ya
+b_fd[-1] -= (1/h**2 + (x_fd[-2]+1)/(2*h)) * yb
+y_fd_inner = np.linalg.solve(A, b_fd)
+y_fd = np.concatenate([[ya], y_fd_inner, [yb]])
+
+
+def phi(i, x):
+    return x**i * (1 - x)
+
+def variational_approx_fixed(n_basis=3):
+    x_var = np.linspace(a, b, N+1)
+    phi_vals = [phi(i+1, x_var) for i in range(n_basis)]
+    dphi_vals = [np.gradient(phi_i, h) for phi_i in phi_vals]
+    ddphi_vals = [np.gradient(dphi_i, h) for dphi_i in dphi_vals]
+
+    K = np.zeros((n_basis, n_basis))
+    F = np.zeros(n_basis)
+
+    for i in range(n_basis):
+        for j in range(n_basis):
+            integrand_K = (
+                ddphi_vals[i] * phi_vals[j]
+                - (x_var + 1) * dphi_vals[i] * phi_vals[j]
+                - 2 * phi_vals[i] * phi_vals[j]
+            )
+            K[i, j] = np.trapz(integrand_K, x_var)
+
+        integrand_F = (1 - x_var**2) * np.exp(-x_var) * phi_vals[i]
+        F[i] = np.trapz(integrand_F, x_var)
+
+    c = np.linalg.solve(K, F)
+    y_var = ya * (1 - x_var) + yb * x_var + sum(c[i] * phi_vals[i] for i in range(n_basis))
+    return x_var, y_var
+
+x_var, y_var = variational_approx_fixed()
+
+
+print("Shooting Method y-values:\n", np.round(y_shoot, 4))
+print("\nFinite Difference y-values:\n", np.round(y_fd, 4))
+print("\nVariational Method y-values:\n", np.round(y_var, 4))
